@@ -18,7 +18,6 @@ use crate::output_section_id::CustomSectionDetails;
 use crate::output_section_id::OutputSections;
 use crate::output_section_id::OutputSectionsBuilder;
 use crate::output_section_id::SectionName;
-use crate::output_section_map::OutputSectionMap;
 use crate::parsing::InternalSymDefInfo;
 use crate::parsing::ParsedInput;
 use crate::parsing::ParsedInputObject;
@@ -29,8 +28,7 @@ use crate::part_id::TemporaryPartId;
 use crate::part_id::UnresolvedSection;
 use crate::sharding::ShardKey;
 use crate::string_merging::MergeStringsFileSection;
-use crate::string_merging::MergeStringsSection;
-use crate::string_merging::UnresolvedMergeStringsFileSection;
+use crate::string_merging::MergeStringsFileSectionData;
 use crate::symbol::SymbolName;
 use crate::symbol_db::SymbolDb;
 use crate::symbol_db::SymbolId;
@@ -53,12 +51,13 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::thread::Thread;
+use crate::string_merging::MergeStringSectionSizes;
 
 pub(crate) struct ResolutionOutputs<'data> {
     pub(crate) groups: Vec<ResolvedGroup<'data>>,
     pub(crate) output_sections: OutputSections<'data>,
-    pub(crate) merged_strings: OutputSectionMap<MergeStringsSection<'data>>,
     pub(crate) custom_start_stop_defs: Vec<InternalSymDefInfo>,
+    pub(crate) merge_string_section_sizes: MergeStringSectionSizes,
 }
 
 #[tracing::instrument(skip_all, name = "Symbol resolution")]
@@ -73,7 +72,7 @@ pub fn resolve_symbols_and_sections<'data>(
 
     let output_sections = assign_section_ids(&mut groups, symbol_db.args)?;
 
-    let merged_strings = crate::string_merging::merge_strings(&mut groups, &output_sections)?;
+    let merge_string_section_sizes = crate::string_merging::merge_strings(&mut groups, &output_sections)?;
 
     let custom_start_stop_defs =
         canonicalise_undefined_symbols(undefined_symbols, &output_sections, &groups, symbol_db)?;
@@ -84,11 +83,12 @@ pub fn resolve_symbols_and_sections<'data>(
         ResolvedFile::Prelude(ResolvedPrelude {
             symbol_definitions: &internal.symbol_definitions,
         });
+
     Ok(ResolutionOutputs {
         groups,
         output_sections,
-        merged_strings,
         custom_start_stop_defs,
+        merge_string_section_sizes,
     })
 }
 
@@ -456,7 +456,7 @@ pub(crate) struct NotLoaded {
 
 /// A section, but where we may or may not yet have decided to load it.
 #[derive(Clone, Copy)]
-pub(crate) enum SectionSlot<'data> {
+pub(crate) enum SectionSlot {
     /// We've decided that this section won't be loaded.
     Discard,
 
@@ -473,7 +473,7 @@ pub(crate) enum SectionSlot<'data> {
     EhFrameData(object::SectionIndex),
 
     /// The section is a string-merge section.
-    MergeStrings(MergeStringsFileSection<'data>),
+    MergeStrings(MergeStringsFileSection),
 
     // The section contains a debug info section that might be loaded.
     UnloadedDebugInfo(PartId),
@@ -518,8 +518,8 @@ pub(crate) struct ResolvedObject<'data> {
 
 /// Parts of a resolved object that are only applicable to non-dynamic objects.
 pub(crate) struct NonDynamicResolved<'data> {
-    pub(crate) sections: Vec<SectionSlot<'data>>,
-    pub(crate) merge_strings_sections: Vec<UnresolvedMergeStringsFileSection<'data>>,
+    pub(crate) sections: Vec<SectionSlot>,
+    pub(crate) merge_strings_sections: Vec<MergeStringsFileSectionData<'data>>,
 
     /// Details about each custom section that is defined in this object.
     custom_sections: Vec<CustomSectionDetails<'data>>,
@@ -709,11 +709,11 @@ impl<'data> ResolvedObject<'data> {
 fn resolve_sections_for_object<'data>(
     obj: &ResolvedObject<'data>,
     custom_sections: &mut Vec<CustomSectionDetails<'data>>,
-    merge_strings_out: &mut Vec<UnresolvedMergeStringsFileSection<'data>>,
+    merge_strings_out: &mut Vec<MergeStringsFileSectionData<'data>>,
     args: &Args,
     allocator: &bumpalo_herd::Member<'data>,
     loaded_metrics: &LoadedMetrics,
-) -> Result<Vec<SectionSlot<'data>>> {
+) -> Result<Vec<SectionSlot>> {
     let sections = obj
         .object
         .sections
@@ -742,13 +742,17 @@ fn resolve_sections_for_object<'data>(
                     let section_data =
                         obj.object
                             .section_data(input_section, allocator, loaded_metrics)?;
-                    merge_strings_out.push(UnresolvedMergeStringsFileSection::new(
+
+                    let merge_section_index = merge_strings_out.len() as u32;
+
+                    merge_strings_out.push(MergeStringsFileSectionData::new(
                         section_data,
                         input_section_index,
-                    )?);
+                    ));
+
                     SectionSlot::MergeStrings(MergeStringsFileSection {
                         part_id,
-                        section_data,
+                        merge_info_index: merge_section_index,
                     })
                 } else {
                     match unloaded.part_id {
@@ -916,7 +920,7 @@ impl<'data> std::fmt::Display for ResolvedFile<'data> {
     }
 }
 
-impl<'data> SectionSlot<'data> {
+impl SectionSlot {
     pub(crate) fn is_loaded(&self) -> bool {
         !matches!(self, SectionSlot::Discard | SectionSlot::Unloaded(..))
     }

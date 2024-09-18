@@ -45,15 +45,17 @@ use crate::resolution::UnloadedSection;
 use crate::resolution::ValueFlags;
 use crate::sharding::ShardKey;
 use crate::string_merging::get_merged_string_output_address;
+use crate::string_merging::MergeStringSectionSizes;
+use crate::string_merging::MergeStringsFileSectionData;
 use crate::string_merging::MergeStringsSection;
 use crate::string_merging::MergedStringStartAddresses;
-use crate::string_merging::StringOffsetCache;
 use crate::symbol::SymbolName;
 use crate::symbol_db::SymbolDb;
 use crate::symbol_db::SymbolDebug;
 use crate::symbol_db::SymbolId;
 use crate::symbol_db::SymbolIdRange;
 use crate::threading::prelude::*;
+use crate::verification::OffsetVerifier;
 use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::ensure;
@@ -92,8 +94,8 @@ pub fn compute<'data>(
     let ResolutionOutputs {
         groups,
         mut output_sections,
-        merged_strings,
         custom_start_stop_defs,
+        merge_string_section_sizes,
     } = resolved;
 
     if let Some(sym_info) = symbol_db.args.sym_info.as_deref() {
@@ -105,7 +107,6 @@ pub fn compute<'data>(
         symbol_db,
         &output_sections,
         &symbol_resolution_flags,
-        &merged_strings,
         custom_start_stop_defs,
     )?;
     let mut group_states = gc_outputs.group_states;
@@ -141,9 +142,9 @@ pub fn compute<'data>(
     let segment_layouts = compute_segment_layout(&section_layouts, &output_sections, header_info)?;
 
     let mem_offsets: OutputSectionPartMap<u64> = starting_memory_offsets(&section_part_layouts);
-    let starting_mem_offsets_by_group = compute_start_offsets_by_group(&group_states, mem_offsets);
+    let mut mem_offsets_by_group = compute_start_offsets_by_group(&group_states, mem_offsets);
     let merged_string_start_addresses =
-        MergedStringStartAddresses::compute(&output_sections, &starting_mem_offsets_by_group);
+        MergedStringStartAddresses::compute(&output_sections, &mem_offsets_by_group);
     let mut symbol_resolutions = SymbolResolutions {
         resolutions: Vec::with_capacity(symbol_db.num_symbols()),
     };
@@ -155,6 +156,14 @@ pub fn compute<'data>(
         .map(|group| res_writer.take_shard(group.num_symbols))
         .collect_vec();
 
+    let verifier = OffsetVerifier::new(&group_states, &mut mem_offsets_by_group);
+
+    let merged_strings = compute_merged_string_addresses(
+        &group_states,
+        &mut mem_offsets_by_group,
+        &merge_string_section_sizes,
+    );
+
     let resources = FinaliseLayoutResources {
         symbol_db,
         symbol_resolution_flags: &symbol_resolution_flags,
@@ -163,12 +172,20 @@ pub fn compute<'data>(
         merged_string_start_addresses: &merged_string_start_addresses,
         merged_strings: &merged_strings,
     };
+
     let group_layouts = compute_symbols_and_layouts(
         group_states,
-        starting_mem_offsets_by_group,
+        &mut mem_offsets_by_group,
         &mut per_group_res_writers,
         &resources,
     )?;
+
+    verifier.verify(
+        &group_layouts,
+        &mem_offsets_by_group,
+        resources.output_sections,
+    )?;
+
     for shard in per_group_res_writers {
         res_writer.try_return_shard(shard)?;
     }
@@ -239,6 +256,39 @@ fn merge_dynamic_symbol_definitions(group_states: &mut [GroupState]) -> Result {
     Ok(())
 }
 
+#[tracing::instrument(skip_all, name = "Compute merged string addresses")]
+fn compute_merged_string_addresses<'data>(
+    group_states: &[GroupState<'data>],
+    mem_offsets_by_group: &mut [OutputSectionPartMap<u64>],
+    sizes: &MergeStringSectionSizes,
+) -> OutputSectionMap<MergeStringsSection> {
+    let merged_string_addresses = sizes.allocate();
+    group_states
+        .par_iter()
+        .zip(mem_offsets_by_group)
+        .for_each(|(group, mem_offsets)| {
+            for file in &group.files {
+                if let FileLayoutState::Object(obj) = file {
+                    for sec in &obj.merge_string_sections {
+                        sec.assign_addresses(
+                            mem_offsets.get_mut(sec.part_id),
+                            merged_string_addresses.get(sec.part_id.output_section_id()),
+                        );
+                    }
+                }
+            }
+        });
+
+    // Ideally this should be a no-op, since the in-memory representation is exactly the same. TODO:
+    // Verify that it actually is.
+    merged_string_addresses.into_map(|addresses| MergeStringsSection {
+        id_to_offset: addresses
+            .into_iter()
+            .map(|address| address.load(atomic::Ordering::Relaxed))
+            .collect(),
+    })
+}
+
 fn compute_total_file_size(section_layouts: &OutputSectionMap<OutputRecordLayout>) -> u64 {
     let mut file_size = 0;
     section_layouts.for_each(|_, s| file_size = file_size.max(s.file_offset + s.file_size));
@@ -257,7 +307,7 @@ pub struct Layout<'data> {
     pub(crate) output_sections: OutputSections<'data>,
     pub(crate) non_addressable_counts: NonAddressableCounts,
     pub(crate) symbol_resolution_flags: Vec<ResolutionFlags>,
-    pub(crate) merged_strings: OutputSectionMap<MergeStringsSection<'data>>,
+    pub(crate) merged_strings: OutputSectionMap<MergeStringsSection>,
     pub(crate) merged_string_start_addresses: MergedStringStartAddresses,
     pub(crate) relocation_statistics: OutputSectionMap<AtomicU64>,
     pub(crate) has_static_tls: bool,
@@ -400,9 +450,10 @@ pub(crate) struct ObjectLayout<'data> {
     pub(crate) input: InputRef<'data>,
     pub(crate) file_id: FileId,
     pub(crate) object: &'data File<'data>,
-    pub(crate) sections: Vec<SectionSlot<'data>>,
+    pub(crate) sections: Vec<SectionSlot>,
     pub(crate) section_resolutions: Vec<SectionResolution>,
     pub(crate) symbol_id_range: SymbolIdRange,
+    pub(crate) merge_string_sections: Vec<MergeStringsFileSectionData<'data>>,
 }
 
 pub(crate) struct PreludeLayout {
@@ -781,8 +832,8 @@ impl<'data> SymbolRequestHandler<'data> for EpilogueLayoutState<'data> {
     }
 }
 
-struct CommonGroupState<'data> {
-    mem_sizes: OutputSectionPartMap<u64>,
+pub(crate) struct CommonGroupState<'data> {
+    pub(crate) mem_sizes: OutputSectionPartMap<u64>,
 
     /// Dynamic symbols that need to be defined. Because of the ordering requirements for symbol
     /// hashes, these get defined by the epilogue. The object on which a particular dynamic symbol
@@ -867,6 +918,7 @@ struct ObjectLayoutState<'data> {
 
     eh_frame_section: Option<&'data object::elf::SectionHeader64<LittleEndian>>,
     eh_frame_size: u64,
+    merge_string_sections: Vec<MergeStringsFileSectionData<'data>>,
 }
 
 /// The parts of `ObjectLayoutState` that we mutate during layout. Separate so that we can pass
@@ -875,7 +927,7 @@ struct ObjectLayoutState<'data> {
 struct ObjectLayoutMutableState<'data> {
     /// Info about each of our sections. Empty until this object has been activated. Indexed the
     /// same as the sections in the input object.
-    sections: Vec<SectionSlot<'data>>,
+    sections: Vec<SectionSlot>,
 
     /// A queue of sections that we need to load.
     sections_required: Vec<SectionRequest>,
@@ -1040,10 +1092,10 @@ pub(crate) struct GroupLayout<'data> {
     pub(crate) file_sizes: OutputSectionPartMap<usize>,
 }
 
-struct GroupState<'data> {
+pub(crate) struct GroupState<'data> {
     queue: LocalWorkQueue,
     files: Vec<FileLayoutState<'data>>,
-    common: CommonGroupState<'data>,
+    pub(crate) common: CommonGroupState<'data>,
     num_symbols: usize,
 }
 
@@ -1087,8 +1139,6 @@ struct GraphResources<'data, 'scope> {
     /// something to refer to in the symtab.
     sections_with_content: OutputSectionMap<AtomicBool>,
 
-    merged_strings: &'scope OutputSectionMap<MergeStringsSection<'data>>,
-
     has_static_tls: AtomicBool,
 }
 
@@ -1098,7 +1148,7 @@ struct FinaliseLayoutResources<'scope, 'data> {
     output_sections: &'scope OutputSections<'data>,
     section_layouts: &'scope OutputSectionMap<OutputRecordLayout>,
     merged_string_start_addresses: &'scope MergedStringStartAddresses,
-    merged_strings: &'scope OutputSectionMap<MergeStringsSection<'data>>,
+    merged_strings: &'scope OutputSectionMap<MergeStringsSection>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -1348,36 +1398,16 @@ fn compute_start_offsets_by_group(
 #[tracing::instrument(skip_all, name = "Assign symbol addresses")]
 fn compute_symbols_and_layouts<'data>(
     group_states: Vec<GroupState<'data>>,
-    starting_mem_offsets_by_group: Vec<OutputSectionPartMap<u64>>,
+    mem_offsets_by_group: &mut [OutputSectionPartMap<u64>],
     per_group_res_writers: &mut [sharded_vec_writer::Shard<Option<Resolution>>],
     resources: &FinaliseLayoutResources<'_, 'data>,
 ) -> Result<Vec<GroupLayout<'data>>> {
     group_states
         .into_par_iter()
-        .zip(starting_mem_offsets_by_group)
+        .zip(mem_offsets_by_group.as_mut())
         .zip(per_group_res_writers)
-        .map(|((state, mut memory_offsets), symbols_out)| {
-            if cfg!(debug_assertions) {
-                let offset_verifier = crate::verification::OffsetVerifier::new(
-                    &memory_offsets,
-                    &state.common.mem_sizes,
-                );
-
-                // Make sure that ignored offsets really aren't used by `finalise_layout` by setting
-                // them to an arbitrary value. If they are used, we'll quickly notice.
-                crate::verification::clear_ignored(&mut memory_offsets);
-
-                let layout = state.finalise_layout(&mut memory_offsets, symbols_out, resources)?;
-
-                offset_verifier.verify(
-                    &memory_offsets,
-                    resources.output_sections,
-                    &layout.files,
-                )?;
-                Ok(layout)
-            } else {
-                state.finalise_layout(&mut memory_offsets, symbols_out, resources)
-            }
+        .map(|((state, memory_offsets), symbols_out)| {
+            state.finalise_layout(memory_offsets, symbols_out, resources)
         })
         .collect()
 }
@@ -1615,7 +1645,6 @@ fn find_required_sections<'data>(
     symbol_db: &SymbolDb<'data>,
     output_sections: &OutputSections<'data>,
     symbol_resolution_flags: &[AtomicResolutionFlags],
-    merged_strings: &OutputSectionMap<MergeStringsSection<'data>>,
     custom_start_stop_defs: Vec<InternalSymDefInfo>,
 ) -> Result<GcOutputs<'data>> {
     let num_workers = groups_in.len();
@@ -1640,7 +1669,6 @@ fn find_required_sections<'data>(
         done: AtomicBool::new(false),
         symbol_resolution_flags,
         sections_with_content: output_sections.new_section_map(),
-        merged_strings,
         has_static_tls: AtomicBool::new(false),
     };
     let resources_ref = &resources;
@@ -2375,15 +2403,6 @@ impl<'data> PreludeLayoutState {
         resources: &GraphResources,
         queue: &mut LocalWorkQueue,
     ) -> Result {
-        resources.merged_strings.for_each(|section_id, merged| {
-            if merged.len() > 0 {
-                common.allocate(
-                    section_id.part_id_with_alignment(alignment::MIN),
-                    merged.len(),
-                );
-            }
-        });
-
         // Allocate space to store the identify of the linker in the .comment section.
         common.allocate(
             output_section_id::COMMENT.part_id_with_alignment(alignment::MIN),
@@ -2618,14 +2637,6 @@ impl<'data> PreludeLayoutState {
             output_section_id::COMMENT.part_id_with_alignment(alignment::MIN),
             self.identity.len() as u64,
         );
-        resources.merged_strings.for_each(|section_id, merged| {
-            if merged.len() > 0 {
-                memory_offsets.increment(
-                    section_id.part_id_with_alignment(alignment::MIN),
-                    merged.len(),
-                );
-            }
-        });
 
         Ok(PreludeLayout {
             internal_symbols: self.internal_symbols,
@@ -2875,6 +2886,7 @@ fn new_object_layout_state(input_state: resolution::ResolvedObject) -> FileLayou
             exception_frames: Default::default(),
             eh_frame_section: None,
             eh_frame_size: 0,
+            merge_string_sections: non_dynamic.merge_strings_sections,
             state: ObjectLayoutMutableState {
                 sections: non_dynamic.sections,
                 sections_required: Default::default(),
@@ -3078,13 +3090,20 @@ impl<'data> ObjectLayoutState<'data> {
         }
         let output_kind = symbol_db.args.output_kind;
         for slot in &mut self.state.sections {
-            if let SectionSlot::Loaded(section) = slot {
-                allocate_resolution(
-                    ValueFlags::ADDRESS,
-                    section.resolution_kind,
-                    &mut common.mem_sizes,
-                    output_kind,
-                );
+            match slot {
+                SectionSlot::Loaded(section) => {
+                    allocate_resolution(
+                        ValueFlags::ADDRESS,
+                        section.resolution_kind,
+                        &mut common.mem_sizes,
+                        output_kind,
+                    );
+                }
+                SectionSlot::MergeStrings(section) => {
+                    let info = &self.merge_string_sections[section.merge_info_index as usize];
+                    common.allocate(section.part_id, info.size);
+                }
+                _ => (),
             }
         }
         // TODO: Deduplicate CIEs from different objects, then only allocate space for those CIEs
@@ -3207,6 +3226,7 @@ impl<'data> ObjectLayoutState<'data> {
             sections: self.state.sections,
             section_resolutions,
             symbol_id_range,
+            merge_string_sections: self.merge_string_sections,
         })
     }
 
@@ -3247,8 +3267,8 @@ impl<'data> ObjectLayoutState<'data> {
                     &self.state.sections,
                     resources.merged_strings,
                     resources.merged_string_start_addresses,
+                    &self.merge_string_sections,
                     true,
-                    &mut StringOffsetCache::no_caching(),
                 )?
                 .ok_or_else(|| {
                     anyhow!(
@@ -3676,7 +3696,6 @@ impl Resolution {
         object_layout: &ObjectLayout,
         merged_strings: &OutputSectionMap<MergeStringsSection>,
         merged_string_start_addresses: &MergedStringStartAddresses,
-        string_offset_cache: &mut StringOffsetCache,
     ) -> Result<u64> {
         // For most symbols, `raw_value` won't be zero, so we can save ourselves from looking up the
         // section to see if it's a string-merge section. For string-merge symbols with names,
@@ -3689,8 +3708,8 @@ impl Resolution {
                 &object_layout.sections,
                 merged_strings,
                 merged_string_start_addresses,
+                &object_layout.merge_string_sections,
                 false,
-                string_offset_cache,
             )? {
                 if self.raw_value != 0 {
                     bail!("Merged string resolution has value 0x{}", self.raw_value);

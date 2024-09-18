@@ -48,4 +48,10 @@ impl<T> OutputSectionMap<T> {
             values: self.values.into_iter().map(cb).collect(),
         }
     }
+
+    pub(crate) fn map<U>(&self, cb: impl FnMut(&T) -> U) -> OutputSectionMap<U> {
+        OutputSectionMap {
+            values: self.values.iter().map(cb).collect(),
+        }
+    }
 }

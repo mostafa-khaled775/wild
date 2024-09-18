@@ -134,7 +134,7 @@ impl<'data> File<'data> {
     pub(crate) fn section_data(
         &self,
         section: &SectionHeader,
-        member: &bumpalo_herd::Member<'data>,
+        allocator: &bumpalo_herd::Member<'data>,
         loaded_metrics: &LoadedMetrics,
     ) -> Result<&'data [u8]> {
         let data = section.data(LittleEndian, self.data)?;
@@ -147,7 +147,7 @@ impl<'data> File<'data> {
                 .loaded_compressed_bytes
                 .fetch_add(data.len(), Ordering::Relaxed);
             let len = self.section_size(section)?;
-            let decompressed = member.alloc_slice_fill_default(len as usize);
+            let decompressed = allocator.alloc_slice_fill_default(len as usize);
             decompress_into(compression, &data[COMPRESSION_HEADER_SIZE..], decompressed)?;
             loaded_metrics
                 .decompressed_bytes

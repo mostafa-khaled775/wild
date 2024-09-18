@@ -3,6 +3,8 @@
 
 use crate::error::Result;
 use crate::layout::FileLayout;
+use crate::layout::GroupLayout;
+use crate::layout::GroupState;
 use crate::output_section_id::OutputSections;
 use crate::output_section_part_map::OutputSectionPartMap;
 use crate::part_id;
@@ -11,11 +13,60 @@ use anyhow::bail;
 use itertools::Itertools;
 
 pub(crate) struct OffsetVerifier {
+    group_verifiers: Vec<GroupOffsetVerifier>,
+}
+
+impl OffsetVerifier {
+    pub(crate) fn new(
+        groups: &[GroupState],
+        mem_offsets_by_group: &mut [OutputSectionPartMap<u64>],
+    ) -> Self {
+        if !cfg!(debug_assertions) {
+            return Self {
+                group_verifiers: Default::default(),
+            };
+        }
+
+        let group_verifiers = groups
+            .iter()
+            .zip(mem_offsets_by_group)
+            .map(|(group, memory_offsets)| {
+                // Make sure that ignored offsets really aren't used by `finalise_layout` by setting
+                // them to an arbitrary value. If they are used, we'll quickly notice.
+                crate::verification::clear_ignored(memory_offsets);
+
+                GroupOffsetVerifier::new(memory_offsets, &group.common.mem_sizes)
+            })
+            .collect_vec();
+        Self { group_verifiers }
+    }
+
+    pub(crate) fn verify(
+        &self,
+        groups: &[GroupLayout],
+        mem_offsets_by_group: &[OutputSectionPartMap<u64>],
+        output_sections: &OutputSections,
+    ) -> Result {
+        if !cfg!(debug_assertions) {
+            return Ok(());
+        }
+        groups
+            .iter()
+            .zip(&self.group_verifiers)
+            .zip(mem_offsets_by_group)
+            .try_for_each(|((group, verifier), memory_offsets)| {
+                verifier.verify(memory_offsets, output_sections, &group.files)
+            })?;
+        Ok(())
+    }
+}
+
+pub(crate) struct GroupOffsetVerifier {
     expected: OutputSectionPartMap<u64>,
     sizes: OutputSectionPartMap<u64>,
 }
 
-impl OffsetVerifier {
+impl GroupOffsetVerifier {
     pub(crate) fn new(
         starting_offsets: &OutputSectionPartMap<u64>,
         sizes: &OutputSectionPartMap<u64>,

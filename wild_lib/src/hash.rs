@@ -5,7 +5,7 @@ use std::ops::Deref;
 
 pub(crate) type PassThroughHashMap<K, V> = HashMap<PreHashed<K>, V, PassThroughHasher>;
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub(crate) struct PassThroughHasher {
     hash: u64,
 }
@@ -53,10 +53,6 @@ impl<T: PartialEq> PartialEq for PreHashed<T> {
 impl<T> PreHashed<T> {
     pub(crate) fn new(value: T, hash: u64) -> Self {
         Self { value, hash }
-    }
-
-    pub(crate) fn hash(&self) -> u64 {
-        self.hash
     }
 }
 

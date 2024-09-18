@@ -35,6 +35,7 @@ flate2 = "1.0.33"
 bumpalo-herd = "0.1.2"
 zstd = "0.13.2"
 fxhash = "0.2.1"
+dashmap = "6.1.0"
 
 [dev-dependencies]
 ar = "0.9.0"
