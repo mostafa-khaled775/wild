@@ -488,6 +488,7 @@ struct PreludeLayoutState {
     header_info: Option<HeaderInfo>,
     dynamic_linker: Option<CString>,
     shstrtab_size: u64,
+    build_id: Option<String>,
 }
 
 pub(crate) struct EpilogueLayoutState<'data> {
@@ -532,6 +533,7 @@ pub(crate) struct PreludeLayout {
     pub(crate) header_info: HeaderInfo,
     pub(crate) internal_symbols: InternalSymbols,
     pub(crate) dynamic_linker: Option<CString>,
+    pub(crate) build_id: Option<String>,
 }
 
 pub(crate) struct InternalSymbols {
@@ -2484,6 +2486,7 @@ impl PreludeLayoutState {
             header_info: None,
             dynamic_linker: None,
             shstrtab_size: 0,
+            build_id: Some("beefbeef".to_string()),
         }
     }
 
@@ -2507,6 +2510,11 @@ impl PreludeLayoutState {
             output_section_id::COMMENT.part_id_with_alignment(alignment::MIN),
             self.identity.len() as u64,
         );
+
+        // Allocate space for the build-id
+        if let Some(build_id) = self.build_id.as_ref() {
+            common.allocate(part_id::NOTE_GNU_BUILD_ID, build_id.len() as u64 + 1);
+        }
 
         // The first entry in the symbol table must be null. Similarly, the first string in the
         // strings table must be empty.
@@ -2733,6 +2741,10 @@ impl PreludeLayoutState {
             output_section_id::COMMENT.part_id_with_alignment(alignment::MIN),
             self.identity.len() as u64,
         );
+        memory_offsets.increment(
+            part_id::NOTE_GNU_BUILD_ID,
+            self.build_id.as_ref().map_or(0, |s| s.len() as u64 + 1),
+        );
         resources.merged_strings.for_each(|section_id, merged| {
             if merged.len() > 0 {
                 memory_offsets.increment(
@@ -2751,6 +2763,7 @@ impl PreludeLayoutState {
             header_info: self
                 .header_info
                 .expect("we should have computed header info by now"),
+            build_id: self.build_id,
         })
     }
 }

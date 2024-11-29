@@ -1869,6 +1869,11 @@ impl PreludeLayout {
 
         self.write_plt_got_entries(layout, table_writer)?;
 
+        if let Some(build_id) = self.build_id.as_ref() {
+            buffers.get_mut(part_id::NOTE_GNU_BUILD_ID).fill(0);
+            buffers.get_mut(part_id::NOTE_GNU_BUILD_ID).write(build_id.as_bytes())?;
+        }
+
         if !layout.args().strip_all {
             self.write_symbol_table_entries(&mut table_writer.debug_symbol_writer, layout)?;
         }
