@@ -2,6 +2,7 @@
 //! referenced. Determines which sections need to be linked, sums their sizes decides what goes
 //! where in the output file then allocates addresses for each symbol.
 
+use self::elf::GnuBuildId;
 use self::elf::NoteHeader;
 use self::elf::GNU_NOTE_NAME;
 use self::elf::GNU_NOTE_PROPERTY_ENTRY_SIZE;
@@ -488,7 +489,6 @@ struct PreludeLayoutState {
     header_info: Option<HeaderInfo>,
     dynamic_linker: Option<CString>,
     shstrtab_size: u64,
-    build_id: Option<String>,
 }
 
 pub(crate) struct EpilogueLayoutState<'data> {
@@ -499,6 +499,7 @@ pub(crate) struct EpilogueLayoutState<'data> {
     dynamic_symbol_definitions: Vec<DynamicSymbolDefinition<'data>>,
     gnu_hash_layout: Option<GnuHashLayout>,
     gnu_property_notes: Vec<GnuProperty>,
+    gnu_build_id_note: GnuBuildId,
 }
 
 #[derive(Default, Debug)]
@@ -515,6 +516,7 @@ pub(crate) struct EpilogueLayout<'data> {
     pub(crate) dynamic_symbol_definitions: Vec<DynamicSymbolDefinition<'data>>,
     dynsym_start_index: u32,
     pub(crate) gnu_property_notes: Vec<GnuProperty>,
+    pub(crate) gnu_build_id_note: GnuBuildId,
 }
 
 pub(crate) struct ObjectLayout<'data> {
@@ -533,7 +535,6 @@ pub(crate) struct PreludeLayout {
     pub(crate) header_info: HeaderInfo,
     pub(crate) internal_symbols: InternalSymbols,
     pub(crate) dynamic_linker: Option<CString>,
-    pub(crate) build_id: Option<String>,
 }
 
 pub(crate) struct InternalSymbols {
@@ -2486,7 +2487,6 @@ impl PreludeLayoutState {
             header_info: None,
             dynamic_linker: None,
             shstrtab_size: 0,
-            build_id: Some("beefbeef".to_string()),
         }
     }
 
@@ -2510,11 +2510,6 @@ impl PreludeLayoutState {
             output_section_id::COMMENT.part_id_with_alignment(alignment::MIN),
             self.identity.len() as u64,
         );
-
-        // Allocate space for the build-id
-        if let Some(build_id) = self.build_id.as_ref() {
-            common.allocate(part_id::NOTE_GNU_BUILD_ID, build_id.len() as u64 + 1);
-        }
 
         // The first entry in the symbol table must be null. Similarly, the first string in the
         // strings table must be empty.
@@ -2741,10 +2736,6 @@ impl PreludeLayoutState {
             output_section_id::COMMENT.part_id_with_alignment(alignment::MIN),
             self.identity.len() as u64,
         );
-        memory_offsets.increment(
-            part_id::NOTE_GNU_BUILD_ID,
-            self.build_id.as_ref().map_or(0, |s| s.len() as u64 + 1),
-        );
         resources.merged_strings.for_each(|section_id, merged| {
             if merged.len() > 0 {
                 memory_offsets.increment(
@@ -2763,7 +2754,6 @@ impl PreludeLayoutState {
             header_info: self
                 .header_info
                 .expect("we should have computed header info by now"),
-            build_id: self.build_id,
         })
     }
 }
@@ -2858,6 +2848,7 @@ impl<'data> EpilogueLayoutState<'data> {
             dynamic_symbol_definitions: Default::default(),
             gnu_hash_layout: None,
             gnu_property_notes: Default::default(),
+            gnu_build_id_note: Default::default(),
         }
     }
 
@@ -2869,6 +2860,10 @@ impl<'data> EpilogueLayoutState<'data> {
                 + GNU_NOTE_NAME.len()
                 + self.gnu_property_notes.len() * GNU_NOTE_PROPERTY_ENTRY_SIZE) as u64
         }
+    }
+
+    fn gnu_build_id_note_section_size(&self) -> u64 {
+        (size_of::<NoteHeader>() + GNU_NOTE_NAME.len() + size_of::<GnuBuildId>()) as u64
     }
 
     fn finalise_sizes<S: StorageModel>(
@@ -2918,6 +2913,11 @@ impl<'data> EpilogueLayoutState<'data> {
         common.allocate(
             part_id::NOTE_GNU_PROPERTY,
             self.gnu_property_notes_section_size(),
+        );
+
+        common.allocate(
+            part_id::NOTE_GNU_BUILD_ID,
+            self.gnu_build_id_note_section_size(),
         );
 
         Ok(())
@@ -2984,12 +2984,18 @@ impl<'data> EpilogueLayoutState<'data> {
             self.gnu_property_notes_section_size(),
         );
 
+        memory_offsets.increment(
+            part_id::NOTE_GNU_BUILD_ID,
+            self.gnu_build_id_note_section_size(),
+        );
+
         Ok(EpilogueLayout {
             internal_symbols: self.internal_symbols,
             gnu_hash_layout: self.gnu_hash_layout,
             dynamic_symbol_definitions: self.dynamic_symbol_definitions,
             dynsym_start_index,
             gnu_property_notes: self.gnu_property_notes,
+            gnu_build_id_note: self.gnu_build_id_note,
         })
     }
 }

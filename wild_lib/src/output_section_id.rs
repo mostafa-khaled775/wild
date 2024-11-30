@@ -83,9 +83,9 @@ pub(crate) const INTERP: OutputSectionId = part_id::INTERP.output_section_id();
 pub(crate) const GNU_VERSION: OutputSectionId = part_id::GNU_VERSION.output_section_id();
 pub(crate) const GNU_VERSION_R: OutputSectionId = part_id::GNU_VERSION_R.output_section_id();
 pub(crate) const PLT_GOT: OutputSectionId = part_id::PLT_GOT.output_section_id();
-pub(crate) const NOTE_GNU_BUILD_ID: OutputSectionId = part_id::NOTE_GNU_BUILD_ID.output_section_id();
 pub(crate) const NOTE_GNU_PROPERTY: OutputSectionId =
     part_id::NOTE_GNU_PROPERTY.output_section_id();
+pub(crate) const NOTE_GNU_BUILD_ID: OutputSectionId = part_id::NOTE_GNU_BUILD_ID.output_section_id();
 
 // These two are multi-part sections, but we can pick any part we wish in order to get the section
 // ID.
@@ -376,17 +376,17 @@ const SECTION_DEFINITIONS: [BuiltInSectionDetails; NUM_BUILT_IN_SECTIONS] = [
         ..DEFAULT_DEFS
     },
     BuiltInSectionDetails {
-        name: SectionName(b".note.gnu.build-id"),
-        ty: sht::NOTE,
-        section_flags: shf::ALLOC.with(shf::GNU_RETAIN),
-        min_alignment: alignment::NOTE_GNU_BUILD_ID,
-        ..DEFAULT_DEFS
-    },
-    BuiltInSectionDetails {
         name: SectionName(b".note.gnu.property"),
         ty: sht::NOTE,
         section_flags: shf::ALLOC,
         min_alignment: alignment::NOTE_GNU_PROPERTY,
+        ..DEFAULT_DEFS
+    },
+    BuiltInSectionDetails {
+        name: SectionName(b".note.gnu.build-id"),
+        ty: sht::NOTE,
+        section_flags: shf::ALLOC,
+        min_alignment: alignment::NOTE_GNU_BUILD_ID,
         ..DEFAULT_DEFS
     },
     // Multi-part generated sections
@@ -748,8 +748,8 @@ impl CustomSectionIds {
         events.push(OrderEvent::SegmentEnd(crate::program_segments::INTERP));
         events.push(OrderEvent::SegmentStart(crate::program_segments::NOTE));
         events.push(NOTE_GNU_PROPERTY.event());
-        events.push(NOTE_ABI_TAG.event());
         events.push(NOTE_GNU_BUILD_ID.event());
+        events.push(NOTE_ABI_TAG.event());
         events.push(OrderEvent::SegmentEnd(crate::program_segments::NOTE));
         events.push(GNU_HASH.event());
         events.push(DYNSYM.event());
@@ -942,8 +942,8 @@ fn test_constant_ids() {
         (GNU_HASH, ".gnu.hash"),
         (PLT_GOT, ".plt.got"),
         (NOTE_ABI_TAG, ".note.ABI-tag"),
-        (NOTE_GNU_BUILD_ID, ".note.gnu.build-id"),
         (NOTE_GNU_PROPERTY, ".note.gnu.property"),
+        (NOTE_GNU_BUILD_ID, ".note.gnu.build-id"),
     ];
     for (id, name) in check {
         dbg!(std::str::from_utf8(id.built_in_details().name.bytes()).unwrap());

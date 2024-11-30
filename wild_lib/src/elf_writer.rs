@@ -1,5 +1,6 @@
 use self::elf::NoteHeader;
 use self::elf::NoteProperty;
+use self::elf::GNU_NOTE_BUILD_ID_SIZE;
 use self::elf::GNU_NOTE_PROPERTY_ENTRY_SIZE;
 use crate::alignment;
 use crate::arch::Arch;
@@ -69,6 +70,7 @@ use linker_utils::elf::sht;
 use linker_utils::elf::SectionFlags;
 use memmap2::MmapOptions;
 use object::elf::NT_GNU_PROPERTY_TYPE_0;
+use object::elf::NT_GNU_BUILD_ID;
 use object::from_bytes_mut;
 use object::read::elf::Rela;
 use object::read::elf::Sym as _;
@@ -1869,11 +1871,6 @@ impl PreludeLayout {
 
         self.write_plt_got_entries(layout, table_writer)?;
 
-        if let Some(build_id) = self.build_id.as_ref() {
-            buffers.get_mut(part_id::NOTE_GNU_BUILD_ID).fill(0);
-            buffers.get_mut(part_id::NOTE_GNU_BUILD_ID).write(build_id.as_bytes())?;
-        }
-
         if !layout.args().strip_all {
             self.write_symbol_table_entries(&mut table_writer.debug_symbol_writer, layout)?;
         }
@@ -2051,6 +2048,8 @@ impl EpilogueLayout<'_> {
             write_gnu_property_notes(self, buffers)?;
         }
 
+        write_gnu_build_id_note(buffers)?;
+
         Ok(())
     }
 }
@@ -2084,6 +2083,26 @@ fn write_gnu_property_notes(
 
     Ok(())
 }
+
+fn write_gnu_build_id_note(buffers: &mut OutputSectionPartMap<&mut [u8]>) -> Result {
+    let e = LittleEndian;
+    let (note_header, mut rest) =
+        from_bytes_mut::<NoteHeader>(buffers.get_mut(part_id::NOTE_GNU_BUILD_ID))
+            .map_err(|_| anyhow!("Insufficient .note.gnu.build-id allocation"))?;
+    note_header.n_namesz.set(e, GNU_NOTE_NAME.len() as u32);
+    note_header.n_descsz.set(e, GNU_NOTE_BUILD_ID_SIZE as u32);
+    note_header.n_type.set(e, NT_GNU_BUILD_ID);
+
+    let name_out = crate::slice::slice_take_prefix_mut(&mut rest, GNU_NOTE_NAME.len());
+    name_out.copy_from_slice(GNU_NOTE_NAME);
+
+    rest.fill(0xaa);
+    Ok(())
+}
+
+// fn compute_gnu_build_id_note(buffers: &OutputSectionPartMap<&[u8]>) -> GnuBuildId {
+//     buffers.merge_parts(|buffers| { } )
+// }
 
 fn write_gnu_hash_tables(
     epilogue: &EpilogueLayout,

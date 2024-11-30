@@ -375,6 +375,7 @@ const _ASSERTS: () = {
 
 pub(crate) const GNU_NOTE_NAME: &[u8] = b"GNU\0";
 pub(crate) const GNU_NOTE_PROPERTY_ENTRY_SIZE: usize = 16;
+pub(crate) const GNU_NOTE_BUILD_ID_SIZE: usize = 20;
 
 /// For additional information on Elf_Prop, see
 /// Linux Extensions to gABI at https://gitlab.com/x86-psABIs/Linux-ABI.
@@ -396,6 +397,12 @@ pub(crate) struct NoteProperty {
     pub(crate) pr_datasz: u32,
     pub(crate) pr_data: u32,
     pub(crate) pr_padding: u32,
+}
+
+#[derive(Zeroable, Pod, Clone, Copy, Default)]
+#[repr(C)]
+pub(crate) struct GnuBuildId {
+    pub(crate) build_id: [u8; GNU_NOTE_BUILD_ID_SIZE],
 }
 
 /// For additional information on ELF relocation types, see "ELF-64 Object File Format" -
