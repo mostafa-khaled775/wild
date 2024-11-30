@@ -294,7 +294,7 @@ impl SizedOutput {
 
 
     fn write_gnu_build_id_note<S: StorageModel>(&mut self, layout: &Layout<S>) -> Result {
-        let build_id_computed = self.compute_gnu_build_id_note();
+        let computed_build_id = self.compute_gnu_build_id_note();
     
         let mut buffers = split_output_into_sections(layout, &mut self.out);
         let e = LittleEndian;
@@ -308,7 +308,7 @@ impl SizedOutput {
         let name_out = crate::slice::slice_take_prefix_mut(&mut rest, GNU_NOTE_NAME.len());
         name_out.copy_from_slice(GNU_NOTE_NAME);
     
-        *bytemuck::from_bytes_mut(rest) = build_id_computed;
+        *bytemuck::from_bytes_mut(rest) = computed_build_id;
     
         Ok(())
     }

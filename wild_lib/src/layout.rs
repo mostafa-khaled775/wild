@@ -498,7 +498,7 @@ pub(crate) struct EpilogueLayoutState<'data> {
     dynamic_symbol_definitions: Vec<DynamicSymbolDefinition<'data>>,
     gnu_hash_layout: Option<GnuHashLayout>,
     gnu_property_notes: Vec<GnuProperty>,
-    gnu_build_id_note: bool,
+    generate_build_id: bool,
 }
 
 #[derive(Default, Debug)]
@@ -515,7 +515,7 @@ pub(crate) struct EpilogueLayout<'data> {
     pub(crate) dynamic_symbol_definitions: Vec<DynamicSymbolDefinition<'data>>,
     dynsym_start_index: u32,
     pub(crate) gnu_property_notes: Vec<GnuProperty>,
-    pub(crate) _gnu_build_id_note: bool,
+    pub(crate) _generate_build_id: bool,
 }
 
 pub(crate) struct ObjectLayout<'data> {
@@ -2836,7 +2836,7 @@ impl<'data> EpilogueLayoutState<'data> {
         resources: &GraphResources<S>,
         _queue: &mut LocalWorkQueue,
     ) -> Result {
-        self.gnu_build_id_note = resources.symbol_db.args.build_id;
+        self.generate_build_id = resources.symbol_db.args.build_id;
         Ok(())
     }
     fn new(
@@ -2856,7 +2856,7 @@ impl<'data> EpilogueLayoutState<'data> {
             dynamic_symbol_definitions: Default::default(),
             gnu_hash_layout: None,
             gnu_property_notes: Default::default(),
-            gnu_build_id_note: Default::default(),
+            generate_build_id: Default::default(),
         }
     }
 
@@ -2923,7 +2923,7 @@ impl<'data> EpilogueLayoutState<'data> {
             self.gnu_property_notes_section_size(),
         );
 
-        if self.gnu_build_id_note {
+        if self.generate_build_id {
             common.allocate(
                 part_id::NOTE_GNU_BUILD_ID,
                 self.gnu_build_id_note_section_size(),
@@ -2994,7 +2994,7 @@ impl<'data> EpilogueLayoutState<'data> {
             self.gnu_property_notes_section_size(),
         );
 
-        if self.gnu_build_id_note {
+        if self.generate_build_id {
             memory_offsets.increment(
                 part_id::NOTE_GNU_BUILD_ID,
                 self.gnu_build_id_note_section_size(),
@@ -3007,7 +3007,7 @@ impl<'data> EpilogueLayoutState<'data> {
             dynamic_symbol_definitions: self.dynamic_symbol_definitions,
             dynsym_start_index,
             gnu_property_notes: self.gnu_property_notes,
-            _gnu_build_id_note: self.gnu_build_id_note,
+            _generate_build_id: self.generate_build_id,
         })
     }
 }
