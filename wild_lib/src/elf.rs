@@ -401,8 +401,12 @@ pub(crate) struct NoteProperty {
 
 #[derive(Zeroable, Pod, Clone, Copy, Default)]
 #[repr(C)]
-pub(crate) struct GnuBuildId {
-    pub(crate) build_id: [u8; GNU_NOTE_BUILD_ID_SIZE],
+pub(crate) struct GnuBuildId(u64);
+
+impl GnuBuildId {
+    pub(crate) fn new(id: u64) -> Self {    
+        Self(id)
+    }
 }
 
 /// For additional information on ELF relocation types, see "ELF-64 Object File Format" -

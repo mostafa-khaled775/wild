@@ -14,6 +14,7 @@ use crate::elf::DynamicEntry;
 use crate::elf::EhFrameHdr;
 use crate::elf::EhFrameHdrEntry;
 use crate::elf::FileHeader;
+use crate::elf::GnuBuildId;
 use crate::elf::GnuHashHeader;
 use crate::elf::ProgramHeader;
 use crate::elf::RelocationKind;
@@ -69,8 +70,8 @@ use linker_utils::elf::shf;
 use linker_utils::elf::sht;
 use linker_utils::elf::SectionFlags;
 use memmap2::MmapOptions;
-use object::elf::NT_GNU_PROPERTY_TYPE_0;
 use object::elf::NT_GNU_BUILD_ID;
+use object::elf::NT_GNU_PROPERTY_TYPE_0;
 use object::from_bytes_mut;
 use object::read::elf::Rela;
 use object::read::elf::Sym as _;
@@ -2085,6 +2086,8 @@ fn write_gnu_property_notes(
 }
 
 fn write_gnu_build_id_note(buffers: &mut OutputSectionPartMap<&mut [u8]>) -> Result {
+    let build_id_computed = compute_gnu_build_id_note(buffers);
+
     let e = LittleEndian;
     let (note_header, mut rest) =
         from_bytes_mut::<NoteHeader>(buffers.get_mut(part_id::NOTE_GNU_BUILD_ID))
@@ -2096,13 +2099,21 @@ fn write_gnu_build_id_note(buffers: &mut OutputSectionPartMap<&mut [u8]>) -> Res
     let name_out = crate::slice::slice_take_prefix_mut(&mut rest, GNU_NOTE_NAME.len());
     name_out.copy_from_slice(GNU_NOTE_NAME);
 
-    rest.fill(0xaa);
+    *bytemuck::from_bytes_mut(rest) = build_id_computed;
+
     Ok(())
 }
 
-// fn compute_gnu_build_id_note(buffers: &OutputSectionPartMap<&[u8]>) -> GnuBuildId {
-//     buffers.merge_parts(|buffers| { } )
-// }
+fn compute_gnu_build_id_note(buffers: &OutputSectionPartMap<&mut [u8]>) -> GnuBuildId {
+    use std::hash::{DefaultHasher, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+
+    buffers.for_each(|_, part| {
+        hasher.write(part);
+    });
+    GnuBuildId::new(hasher.finish())
+}
 
 fn write_gnu_hash_tables(
     epilogue: &EpilogueLayout,

@@ -2,7 +2,6 @@
 //! referenced. Determines which sections need to be linked, sums their sizes decides what goes
 //! where in the output file then allocates addresses for each symbol.
 
-use self::elf::GnuBuildId;
 use self::elf::NoteHeader;
 use self::elf::GNU_NOTE_NAME;
 use self::elf::GNU_NOTE_PROPERTY_ENTRY_SIZE;
@@ -502,6 +501,9 @@ pub(crate) struct EpilogueLayoutState<'data> {
     gnu_build_id_note: GnuBuildId,
 }
 
+// an empty struct to indicate the owner of the GnuBuildId in the layout
+struct GnuBuildId;
+
 #[derive(Default, Debug)]
 pub(crate) struct GnuHashLayout {
     pub(crate) bucket_count: u32,
@@ -516,7 +518,7 @@ pub(crate) struct EpilogueLayout<'data> {
     pub(crate) dynamic_symbol_definitions: Vec<DynamicSymbolDefinition<'data>>,
     dynsym_start_index: u32,
     pub(crate) gnu_property_notes: Vec<GnuProperty>,
-    pub(crate) gnu_build_id_note: GnuBuildId,
+    _gnu_build_id_note: GnuBuildId,
 }
 
 pub(crate) struct ObjectLayout<'data> {
@@ -2848,7 +2850,7 @@ impl<'data> EpilogueLayoutState<'data> {
             dynamic_symbol_definitions: Default::default(),
             gnu_hash_layout: None,
             gnu_property_notes: Default::default(),
-            gnu_build_id_note: Default::default(),
+            gnu_build_id_note: GnuBuildId
         }
     }
 
@@ -2995,7 +2997,7 @@ impl<'data> EpilogueLayoutState<'data> {
             dynamic_symbol_definitions: self.dynamic_symbol_definitions,
             dynsym_start_index,
             gnu_property_notes: self.gnu_property_notes,
-            gnu_build_id_note: self.gnu_build_id_note,
+            _gnu_build_id_note: self.gnu_build_id_note,
         })
     }
 }
