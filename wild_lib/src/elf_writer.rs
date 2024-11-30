@@ -2095,7 +2095,7 @@ fn write_gnu_build_id_note(buffers: &mut OutputSectionPartMap<&mut [u8]>) -> Res
         from_bytes_mut::<NoteHeader>(buffers.get_mut(part_id::NOTE_GNU_BUILD_ID))
             .map_err(|_| anyhow!("Insufficient .note.gnu.build-id allocation"))?;
     note_header.n_namesz.set(e, GNU_NOTE_NAME.len() as u32);
-    note_header.n_descsz.set(e, GNU_NOTE_BUILD_ID_SIZE as u32);
+    note_header.n_descsz.set(e, size_of::<GnuBuildId>() as u32);
     note_header.n_type.set(e, NT_GNU_BUILD_ID);
 
     let name_out = crate::slice::slice_take_prefix_mut(&mut rest, GNU_NOTE_NAME.len());
