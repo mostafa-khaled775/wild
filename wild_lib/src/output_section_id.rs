@@ -379,7 +379,7 @@ const SECTION_DEFINITIONS: [BuiltInSectionDetails; NUM_BUILT_IN_SECTIONS] = [
         name: SectionName(b".note.gnu.build-id"),
         ty: sht::NOTE,
         section_flags: shf::ALLOC.with(shf::GNU_RETAIN),
-        min_alignment: alignment::BUILD_ID,
+        min_alignment: alignment::NOTE_GNU_BUILD_ID,
         ..DEFAULT_DEFS
     },
     BuiltInSectionDetails {
