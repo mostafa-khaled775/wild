@@ -256,7 +256,7 @@ pub(crate) fn parse<S: AsRef<str>, I: Iterator<Item = S>>(mut input: I) -> Resul
             build_id = true;
         } else if let Some(build_id_value) = long_arg_split_prefix("build-id=") {
             match build_id_value {
-                "None" => build_id = false,
+                "none" => build_id = false,
                 _ => build_id = true,
             };
         } else if long_arg_eq("time") {
