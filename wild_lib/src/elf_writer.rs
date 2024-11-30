@@ -1,6 +1,5 @@
 use self::elf::NoteHeader;
 use self::elf::NoteProperty;
-use self::elf::GNU_NOTE_BUILD_ID_SIZE;
 use self::elf::GNU_NOTE_PROPERTY_ENTRY_SIZE;
 use crate::alignment;
 use crate::arch::Arch;
@@ -76,7 +75,6 @@ use object::from_bytes_mut;
 use object::read::elf::Rela;
 use object::read::elf::Sym as _;
 use object::LittleEndian;
-use tracing::instrument;
 use std::fmt::Display;
 use std::io::Write;
 use std::ops::Deref;
@@ -89,6 +87,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use tracing::debug_span;
+use tracing::instrument;
 
 pub struct Output {
     path: Arc<Path>,
@@ -286,9 +285,49 @@ impl SizedOutput {
             let mut section_buffers = split_output_into_sections(layout, &mut self.out);
             sort_eh_frame_hdr_entries(section_buffers.get_mut(output_section_id::EH_FRAME_HDR));
         }
+
+        if layout.args().build_id {
+            self.write_gnu_build_id_note(layout)?;
+        }
         Ok(())
     }
 
+
+    fn write_gnu_build_id_note<S: StorageModel>(&mut self, layout: &Layout<S>) -> Result {
+        let build_id_computed = self.compute_gnu_build_id_note();
+    
+        let mut buffers = split_output_into_sections(layout, &mut self.out);
+        let e = LittleEndian;
+        let (note_header, mut rest) =
+            from_bytes_mut::<NoteHeader>(buffers.get_mut(output_section_id::NOTE_GNU_BUILD_ID))
+                .map_err(|_| anyhow!("Insufficient .note.gnu.build-id allocation"))?;
+        note_header.n_namesz.set(e, GNU_NOTE_NAME.len() as u32);
+        note_header.n_descsz.set(e, size_of::<GnuBuildId>() as u32);
+        note_header.n_type.set(e, NT_GNU_BUILD_ID);
+    
+        let name_out = crate::slice::slice_take_prefix_mut(&mut rest, GNU_NOTE_NAME.len());
+        name_out.copy_from_slice(GNU_NOTE_NAME);
+    
+        *bytemuck::from_bytes_mut(rest) = build_id_computed;
+    
+        Ok(())
+    }
+    
+    #[instrument(skip_all, name = "Compute build ID")]
+    fn compute_gnu_build_id_note(&self) -> GnuBuildId {
+        use std::hash::{DefaultHasher, Hasher};
+
+        let output_buffer = match &self.out {
+            OutputBuffer::Mmap(mmap) => mmap.deref(),
+            OutputBuffer::InMemory(vec) => vec.deref(),
+        };
+    
+        let mut hasher = DefaultHasher::new();
+    
+        hasher.write(output_buffer);
+        GnuBuildId::new(hasher.finish())
+    }
+    
     fn flush(&mut self) -> Result {
         match &self.out {
             OutputBuffer::Mmap(_) => {}
@@ -2050,10 +2089,6 @@ impl EpilogueLayout<'_> {
             write_gnu_property_notes(self, buffers)?;
         }
 
-        if self.gnu_build_id_note {
-            write_gnu_build_id_note(buffers)?;
-        }
-
         Ok(())
     }
 }
@@ -2086,37 +2121,6 @@ fn write_gnu_property_notes(
     }
 
     Ok(())
-}
-
-fn write_gnu_build_id_note(buffers: &mut OutputSectionPartMap<&mut [u8]>) -> Result {
-    let build_id_computed = compute_gnu_build_id_note(buffers);
-
-    let e = LittleEndian;
-    let (note_header, mut rest) =
-        from_bytes_mut::<NoteHeader>(buffers.get_mut(part_id::NOTE_GNU_BUILD_ID))
-            .map_err(|_| anyhow!("Insufficient .note.gnu.build-id allocation"))?;
-    note_header.n_namesz.set(e, GNU_NOTE_NAME.len() as u32);
-    note_header.n_descsz.set(e, size_of::<GnuBuildId>() as u32);
-    note_header.n_type.set(e, NT_GNU_BUILD_ID);
-
-    let name_out = crate::slice::slice_take_prefix_mut(&mut rest, GNU_NOTE_NAME.len());
-    name_out.copy_from_slice(GNU_NOTE_NAME);
-
-    *bytemuck::from_bytes_mut(rest) = build_id_computed;
-
-    Ok(())
-}
-
-#[instrument(skip_all, name = "Compute build ID")]
-fn compute_gnu_build_id_note(buffers: &OutputSectionPartMap<&mut [u8]>) -> GnuBuildId {
-    use std::hash::{DefaultHasher, Hasher};
-
-    let mut hasher = DefaultHasher::new();
-
-    buffers.for_each(|_, part| {
-        hasher.write(part);
-    });
-    GnuBuildId::new(hasher.finish())
 }
 
 fn write_gnu_hash_tables(
