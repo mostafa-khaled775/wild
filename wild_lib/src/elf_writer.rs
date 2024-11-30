@@ -2049,7 +2049,9 @@ impl EpilogueLayout<'_> {
             write_gnu_property_notes(self, buffers)?;
         }
 
-        write_gnu_build_id_note(buffers)?;
+        if self.gnu_build_id_note {
+            write_gnu_build_id_note(buffers)?;
+        }
 
         Ok(())
     }

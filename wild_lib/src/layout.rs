@@ -498,11 +498,8 @@ pub(crate) struct EpilogueLayoutState<'data> {
     dynamic_symbol_definitions: Vec<DynamicSymbolDefinition<'data>>,
     gnu_hash_layout: Option<GnuHashLayout>,
     gnu_property_notes: Vec<GnuProperty>,
-    gnu_build_id_note: GnuBuildId,
+    gnu_build_id_note: bool,
 }
-
-// an empty struct to indicate the owner of the GnuBuildId in the layout
-struct GnuBuildId;
 
 #[derive(Default, Debug)]
 pub(crate) struct GnuHashLayout {
@@ -518,7 +515,7 @@ pub(crate) struct EpilogueLayout<'data> {
     pub(crate) dynamic_symbol_definitions: Vec<DynamicSymbolDefinition<'data>>,
     dynsym_start_index: u32,
     pub(crate) gnu_property_notes: Vec<GnuProperty>,
-    _gnu_build_id_note: GnuBuildId,
+    pub(crate) gnu_build_id_note: bool,
 }
 
 pub(crate) struct ObjectLayout<'data> {
@@ -1988,7 +1985,7 @@ fn activate<'data, S: StorageModel, A: Arch>(
         FileLayoutState::Prelude(s) => s.activate(common, resources, queue),
         FileLayoutState::Dynamic(s) => s.activate(common, resources, queue),
         FileLayoutState::NotLoaded(_) => Ok(()),
-        FileLayoutState::Epilogue(_) => Ok(()),
+        FileLayoutState::Epilogue(s) => s.activate(common, resources, queue),
     }
 }
 
@@ -2833,6 +2830,15 @@ impl InternalSymbols {
 }
 
 impl<'data> EpilogueLayoutState<'data> {
+    fn activate<S: StorageModel>(
+        &mut self,
+        _common: &mut CommonGroupState,
+        resources: &GraphResources<S>,
+        _queue: &mut LocalWorkQueue,
+    ) -> Result {
+        self.gnu_build_id_note = resources.symbol_db.args.build_id;
+        Ok(())
+    }
     fn new(
         input_state: ResolvedEpilogue,
         custom_start_stop_defs: Vec<InternalSymDefInfo>,
@@ -2850,7 +2856,7 @@ impl<'data> EpilogueLayoutState<'data> {
             dynamic_symbol_definitions: Default::default(),
             gnu_hash_layout: None,
             gnu_property_notes: Default::default(),
-            gnu_build_id_note: GnuBuildId
+            gnu_build_id_note: Default::default(),
         }
     }
 
@@ -2865,7 +2871,7 @@ impl<'data> EpilogueLayoutState<'data> {
     }
 
     fn gnu_build_id_note_section_size(&self) -> u64 {
-        (size_of::<NoteHeader>() + GNU_NOTE_NAME.len() + size_of::<GnuBuildId>()) as u64
+        (size_of::<NoteHeader>() + GNU_NOTE_NAME.len() + size_of::<elf::GnuBuildId>()) as u64
     }
 
     fn finalise_sizes<S: StorageModel>(
@@ -2917,10 +2923,12 @@ impl<'data> EpilogueLayoutState<'data> {
             self.gnu_property_notes_section_size(),
         );
 
-        common.allocate(
-            part_id::NOTE_GNU_BUILD_ID,
-            self.gnu_build_id_note_section_size(),
-        );
+        if self.gnu_build_id_note {
+            common.allocate(
+                part_id::NOTE_GNU_BUILD_ID,
+                self.gnu_build_id_note_section_size(),
+            );
+        }
 
         Ok(())
     }
@@ -2986,10 +2994,12 @@ impl<'data> EpilogueLayoutState<'data> {
             self.gnu_property_notes_section_size(),
         );
 
-        memory_offsets.increment(
-            part_id::NOTE_GNU_BUILD_ID,
-            self.gnu_build_id_note_section_size(),
-        );
+        if self.gnu_build_id_note {
+            memory_offsets.increment(
+                part_id::NOTE_GNU_BUILD_ID,
+                self.gnu_build_id_note_section_size(),
+            );
+        }
 
         Ok(EpilogueLayout {
             internal_symbols: self.internal_symbols,
@@ -2997,7 +3007,7 @@ impl<'data> EpilogueLayoutState<'data> {
             dynamic_symbol_definitions: self.dynamic_symbol_definitions,
             dynsym_start_index,
             gnu_property_notes: self.gnu_property_notes,
-            _gnu_build_id_note: self.gnu_build_id_note,
+            gnu_build_id_note: self.gnu_build_id_note,
         })
     }
 }
