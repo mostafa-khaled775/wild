@@ -515,7 +515,7 @@ pub(crate) struct EpilogueLayout<'data> {
     pub(crate) dynamic_symbol_definitions: Vec<DynamicSymbolDefinition<'data>>,
     dynsym_start_index: u32,
     pub(crate) gnu_property_notes: Vec<GnuProperty>,
-    pub(crate) gnu_build_id_note: bool,
+    pub(crate) _gnu_build_id_note: bool,
 }
 
 pub(crate) struct ObjectLayout<'data> {
@@ -3007,7 +3007,7 @@ impl<'data> EpilogueLayoutState<'data> {
             dynamic_symbol_definitions: self.dynamic_symbol_definitions,
             dynsym_start_index,
             gnu_property_notes: self.gnu_property_notes,
-            gnu_build_id_note: self.gnu_build_id_note,
+            _gnu_build_id_note: self.gnu_build_id_note,
         })
     }
 }

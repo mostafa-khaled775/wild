@@ -375,7 +375,6 @@ const _ASSERTS: () = {
 
 pub(crate) const GNU_NOTE_NAME: &[u8] = b"GNU\0";
 pub(crate) const GNU_NOTE_PROPERTY_ENTRY_SIZE: usize = 16;
-pub(crate) const GNU_NOTE_BUILD_ID_SIZE: usize = 20;
 
 /// For additional information on Elf_Prop, see
 /// Linux Extensions to gABI at https://gitlab.com/x86-psABIs/Linux-ABI.

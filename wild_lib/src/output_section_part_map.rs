@@ -55,15 +55,6 @@ impl OutputSectionPartMap<u64> {
     }
 }
 
-impl<T> OutputSectionPartMap<T> {
-    pub(crate) fn for_each(&self, mut cb: impl FnMut(PartId, &T)) {
-        self.parts
-            .iter()
-            .enumerate()
-            .for_each(|(k, v)| cb(PartId::from_usize(k), v));
-    }
-}
-
 impl<T: Default + PartialEq> OutputSectionPartMap<T> {
     /// Iterate through all contained T, producing a new map of U from the values returned by the
     /// callback.
