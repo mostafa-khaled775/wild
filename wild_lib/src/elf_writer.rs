@@ -76,6 +76,7 @@ use object::from_bytes_mut;
 use object::read::elf::Rela;
 use object::read::elf::Sym as _;
 use object::LittleEndian;
+use tracing::instrument;
 use std::fmt::Display;
 use std::io::Write;
 use std::ops::Deref;
@@ -2106,6 +2107,7 @@ fn write_gnu_build_id_note(buffers: &mut OutputSectionPartMap<&mut [u8]>) -> Res
     Ok(())
 }
 
+#[instrument(skip_all, name = "Compute build ID")]
 fn compute_gnu_build_id_note(buffers: &OutputSectionPartMap<&mut [u8]>) -> GnuBuildId {
     use std::hash::{DefaultHasher, Hasher};
 
